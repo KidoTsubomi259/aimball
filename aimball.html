@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>FPS点小球 · 静态靶场</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none; /* 避免选中文字，提升射击手感 */
+        }
+
+        body {
+            background: linear-gradient(145deg, #0a0f1e 0%, #0c1222 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', 'Poppins', 'Courier New', monospace;
+            padding: 20px;
+        }
+
+        /* 游戏主容器 */
+        .game-container {
+            background: #1a1f2e;
+            border-radius: 32px;
+            box-shadow: 0 20px 35px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            padding: 20px 20px 24px;
+        }
+
+        /* 信息面板 (分数 + 倒计时) */
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 16px;
+            padding: 0 12px;
+        }
+
+        .score-box, .timer-box {
+            background: #0f121f;
+            padding: 8px 24px;
+            border-radius: 60px;
+            backdrop-filter: blur(4px);
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .score-box span:first-child, .timer-box span:first-child {
+            font-size: 0.9rem;
+            font-weight: 500;
+            letter-spacing: 1px;
+            color: #8e9aaf;
+            text-transform: uppercase;
+        }
+
+        .score-value, .timer-value {
+            font-size: 2.4rem;
+            font-weight: 800;
+            margin-left: 12px;
+            color: #f5f9ff;
+            text-shadow: 0 0 5px #00a6ff40;
+        }
+
+        .score-value {
+            color: #ffd966;
+        }
+
+        .timer-value {
+            color: #6bcbff;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Canvas 区域 — 靶场 */
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 24px;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+            cursor: none;  /* 隐藏默认鼠标，我们绘制FPS准星 */
+            background: radial-gradient(circle at 30% 20%, #21283c, #0b0f1a);
+        }
+
+        /* 底部按钮区 */
+        .control-bar {
+            display: flex;
+            justify-content: center;
+            margin-top: 22px;
+        }
+
+        .restart-btn {
+            background: #2a2f42;
+            border: none;
+            padding: 10px 32px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            font-family: inherit;
+            color: #eef4ff;
+            border-radius: 60px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(4px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .restart-btn:hover {
+            background: #3f4660;
+            transform: scale(0.97);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.4);
+            color: #ffd966;
+        }
+
+        .restart-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* 提示信息 */
+        .game-message {
+            text-align: center;
+            margin-top: 12px;
+            font-size: 0.85rem;
+            color: #8f9bb5;
+            font-weight: 500;
+        }
+        
+        @media (max-width: 780px) {
+            .score-value, .timer-value {
+                font-size: 1.8rem;
+            }
+            .stats {
+                padding: 0 4px;
+            }
+            .score-box, .timer-box {
+                padding: 4px 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="game-container">
+    <div class="stats">
+        <div class="score-box">
+            <span>🎯 击杀分</span>
+            <span class="score-value" id="scoreDisplay">0</span>
+        </div>
+        <div class="timer-box">
+            <span>⏱️ 剩余时间</span>
+            <span class="timer-value" id="timerDisplay">60</span>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas" width="1000" height="600"></canvas>
+
+    <div class="control-bar">
+        <button class="restart-btn" id="restartButton">🔫 重新装填 / 开始</button>
+    </div>
+    <div class="game-message">
+        🎯 移动鼠标，点击左键射击浅蓝色小球 | 命中后小球在靶区内重新出现 | 倒计时结束前尽量多命中
+    </div>
+</div>
+
+<script>
+    (function(){
+        // ---------- DOM 元素 ----------
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreSpan = document.getElementById('scoreDisplay');
+        const timerSpan = document.getElementById('timerDisplay');
+        const restartBtn = document.getElementById('restartButton');
+
+        // ---------- 游戏配置参数 ----------
+        const CANVAS_W = 1000;
+        const CANVAS_H = 600;
+        const BALL_COUNT = 3;               // 同时只存在3个小球
+        const BALL_RADIUS = 22;              // 半径（方便瞄准）
+        const BALL_COLOR = '#7bc5ff';        // 统一的浅蓝色，带一点光泽
+        
+        // 固定区域：小球生成的安全边界（避免超出画布边缘）
+        const MIN_X = BALL_RADIUS + 10;
+        const MAX_X = CANVAS_W - BALL_RADIUS - 10;
+        const MIN_Y = BALL_RADIUS + 10;
+        const MAX_Y = CANVAS_H - BALL_RADIUS - 10;
+        
+        // 小球数组（静态，无速度）
+        let balls = [];
+        
+        // 游戏状态
+        let gameActive = true;
+        let currentScore = 0;
+        let timeLeft = 60;
+        let timerInterval = null;
+        let animationId = null;
+        
+        // 击中特效 (+1 飘字)
+        let hitEffects = [];
+        
+        // ---------- 准星系统 ----------
+        let mouseX = CANVAS_W / 2;
+        let mouseY = CANVAS_H / 2;
+        let mouseInside = true;
+        
+        // ---------- 辅助函数：检查两点是否重叠（考虑半径）----------
+        function isOverlap(x1, y1, x2, y2, minDist) {
+            const dx = x1 - x2;
+            const dy = y1 - y2;
+            return Math.hypot(dx, dy) < minDist;
+        }
+        
+        // 生成不与现有小球重叠的随机位置（确保在安全区域内）
+        function getNonOverlapPosition(existingBalls, newBallRadius, maxAttempts = 300) {
+            let attempts = 0;
+            let candidateX, candidateY;
+            let overlapping;
+            const minDistance = newBallRadius * 2 + 5; // 小球之间至少间隔5px
+            
+            do {
+                overlapping = false;
+                candidateX = MIN_X + Math.random() * (MAX_X - MIN_X);
+                candidateY = MIN_Y + Math.random() * (MAX_Y - MIN_Y);
+                
+                for (let ball of existingBalls) {
+                    if (Math.hypot(candidateX - ball.x, candidateY - ball.y) < minDistance) {
+                        overlapping = true;
+                        break;
+                    }
+                }
+                attempts++;
+                if (attempts > maxAttempts) {
+                    // 保底：强行放在一个角落，尽量避免重叠（极端情况）
+                    candidateX = MIN_X + (Math.random() * (MAX_X - MIN_X));
+                    candidateY = MIN_Y + (Math.random() * (MAX_Y - MIN_Y));
+                    break;
+                }
+            } while (overlapping);
+            
+            return { x: candidateX, y: candidateY };
+        }
+        
+        // 初始化所有小球（静态，不移动）
+        function initBalls() {
+            const newBalls = [];
+            for (let i = 0; i < BALL_COUNT; i++) {
+                const pos = getNonOverlapPosition(newBalls, BALL_RADIUS, 200);
+                newBalls.push({
+                    x: pos.x,
+                    y: pos.y,
+                    radius: BALL_RADIUS,
+                    color: BALL_COLOR,
+                    hitFlash: 0      // 命中闪白效果（预留）
+                });
+            }
+            return newBalls;
+        }
+        
+        // 命中后：移除该小球，并生成一个新的不重叠小球（保持总数不变）
+        function respawnBall(hitIndex) {
+            if (!gameActive) return;
+            
+            // 移除命中的小球
+            balls.splice(hitIndex, 1);
+            
+            // 生成新的小球，不与当前 balls 数组中任意小球重叠
+            const newPos = getNonOverlapPosition(balls, BALL_RADIUS, 300);
+            balls.push({
+                x: newPos.x,
+                y: newPos.y,
+                radius: BALL_RADIUS,
+                color: BALL_COLOR,
+                hitFlash: 0.6   // 短暂闪烁效果，提升反馈
+            });
+        }
+        
+        // 重置整个游戏
+        function resetGame() {
+            // 停止计时器
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            
+            gameActive = true;
+            currentScore = 0;
+            timeLeft = 60;
+            updateScoreUI();
+            updateTimerUI();
+            
+            // 重新生成静态小球（3个）
+            balls = initBalls();
+            
+            // 清空特效
+            hitEffects = [];
+            
+            // 鼠标位置重置（避免准星异常）
+            mouseX = CANVAS_W / 2;
+            mouseY = CANVAS_H / 2;
+            
+            // 启动倒计时
+            startTimer();
+            
+            // 确保动画循环运行
+            if (!animationId) {
+                animationId = requestAnimationFrame(drawAndUpdate);
+            }
+        }
+        
+        // 倒计时
+        function startTimer() {
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (!gameActive) return;
+                if (timeLeft <= 1) {
+                    timeLeft = 0;
+                    updateTimerUI();
+                    gameActive = false;
+                    if (timerInterval) {
+                        clearInterval(timerInterval);
+                        timerInterval = null;
+                    }
+                } else {
+                    timeLeft--;
+                    updateTimerUI();
+                }
+            }, 1000);
+        }
+        
+        // UI 更新
+        function updateScoreUI() {
+            scoreSpan.innerText = currentScore;
+        }
+        
+        function updateTimerUI() {
+            timerSpan.innerText = timeLeft;
+        }
+        
+        // 增加分数 + 击中特效
+        function addScore(points, worldX, worldY) {
+            if (!gameActive) return;
+            currentScore += points;
+            updateScoreUI();
+            hitEffects.push({
+                x: worldX,
+                y: worldY,
+                life: 1.0,
+                alpha: 1.0
+            });
+            // 轻量震动（可选）
+            if (navigator.vibrate) navigator.vibrate(40);
+        }
+        
+        // 处理射击 (鼠标点击)
+        function handleShoot(clickX, clickY) {
+            if (!gameActive) return false;
+            
+            // 从后往前检测（命中最近的一个? 直接遍历找到第一个命中的）
+            let hitIndex = -1;
+            for (let i = 0; i < balls.length; i++) {
+                const ball = balls[i];
+                const dx = clickX - ball.x;
+                const dy = clickY - ball.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist <= ball.radius) {
+                    hitIndex = i;
+                    break;
+                }
+            }
+            
+            if (hitIndex !== -1) {
+                const hitBall = balls[hitIndex];
+                const hitX = hitBall.x;
+                const hitY = hitBall.y;
+                
+                // 增加分数
+                addScore(1, hitX, hitY);
+                
+                // 命中后：移除被击中的小球，并在固定区域内生成一个新的小球（总数保持3）
+                respawnBall(hitIndex);
+                return true;
+            }
+            return false;
+        }
+        
+        // ---------- 图形绘制模块 (包含准星、小球、特效) ----------
+        function drawBackground() {
+            // 渐变背景已经在CSS里，canvas再绘制网格线增加战术感
+            ctx.save();
+            ctx.globalAlpha = 0.3;
+            ctx.strokeStyle = '#88aaff';
+            ctx.lineWidth = 0.8;
+            for (let i = 0; i < CANVAS_W; i += 50) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i, CANVAS_H);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i % CANVAS_H);
+                ctx.lineTo(CANVAS_W, i % CANVAS_H);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+        
+        // 绘制小球（浅蓝色，带高光）
+        function drawBall(ball) {
+            ctx.save();
+            // 命中闪光效果 (若hitFlash > 0 则外圈发白并逐渐消退)
+            let flashIntensity = ball.hitFlash || 0;
+            if (flashIntensity > 0) {
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = 'white';
+                // 渐变临时调亮
+                const grad = ctx.createRadialGradient(ball.x - 5, ball.y - 5, 5, ball.x, ball.y, ball.radius);
+                grad.addColorStop(0, '#ffffff');
+                grad.addColorStop(1, ball.color);
+                ctx.fillStyle = grad;
+                // 降低闪光值，下一帧渐隐
+                ball.hitFlash = Math.max(0, flashIntensity - 0.05);
+            } else {
+                // 正常浅蓝色立体渐变
+                const grad = ctx.createRadialGradient(ball.x - 6, ball.y - 6, 6, ball.x, ball.y, ball.radius);
+                grad.addColorStop(0, '#c0e4ff');
+                grad.addColorStop(0.6, ball.color);
+                grad.addColorStop(1, '#4a9eff');
+                ctx.fillStyle = grad;
+            }
+            
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            // 增加外发光（瞄准感）
+            ctx.strokeStyle = 'rgba(255,255,200,0.5)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            // 高光点
+            ctx.beginPath();
+            ctx.arc(ball.x - 5, ball.y - 5, 5, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.fill();
+            ctx.restore();
+        }
+        
+        // 绘制命中特效 (+1 飘字)
+        function drawHitEffects() {
+            for (let i = 0; i < hitEffects.length; i++) {
+                const fx = hitEffects[i];
+                ctx.save();
+                ctx.font = 'bold 26px "Segoe UI", "Poppins"';
+                ctx.shadowBlur = 4;
+                ctx.shadowColor = 'black';
+                ctx.globalAlpha = fx.life * 0.9;
+                const offsetY = (1 - fx.life) * 35; // 向上飘移
+                ctx.fillStyle = `#ffd966`;
+                ctx.fillText('+1', fx.x - 18, fx.y - 15 - offsetY);
+                ctx.fillStyle = `rgba(255, 200, 100, ${fx.life * 0.8})`;
+                ctx.fillText('+1', fx.x - 19, fx.y - 16 - offsetY);
+                fx.life -= 0.035;
+                ctx.restore();
+            }
+            // 清除生命值耗尽的特效
+            hitEffects = hitEffects.filter(fx => fx.life > 0);
+        }
+        
+        // 绘制FPS风格准星
+        function drawCrosshair() {
+            if (!mouseInside) return;
+            const cx = mouseX;
+            const cy = mouseY;
+            const size = 14;
+            const gap = 6;
+            ctx.save();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2.5;
+            ctx.shadowBlur = 2;
+            ctx.shadowColor = '#00a6ff';
+            ctx.beginPath();
+            // 上
+            ctx.moveTo(cx, cy - gap);
+            ctx.lineTo(cx, cy - gap - size);
+            // 下
+            ctx.moveTo(cx, cy + gap);
+            ctx.lineTo(cx, cy + gap + size);
+            // 左
+            ctx.moveTo(cx - gap, cy);
+            ctx.lineTo(cx - gap - size, cy);
+            // 右
+            ctx.moveTo(cx + gap, cy);
+            ctx.lineTo(cx + gap + size, cy);
+            ctx.stroke();
+            // 中心空心点
+            ctx.beginPath();
+            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+            ctx.strokeStyle = '#ccffaa';
+            ctx.lineWidth = 1.8;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(cx, cy, 1.5, 0, Math.PI * 2);
+            ctx.fillStyle = '#ccffaa';
+            ctx.fill();
+            ctx.restore();
+        }
+        
+        // 游戏结束绘制蒙层
+        function drawGameOverlay() {
+            if (gameActive) return;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+            ctx.font = 'bold 38px "Segoe UI", "Poppins"';
+            ctx.fillStyle = '#ffdd99';
+            ctx.shadowBlur = 0;
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', CANVAS_W/2, CANVAS_H/2 - 40);
+            ctx.font = '24px monospace';
+            ctx.fillStyle = '#d4eaff';
+            ctx.fillText(`最终得分: ${currentScore}`, CANVAS_W/2, CANVAS_H/2 + 40);
+            ctx.font = '18px monospace';
+            ctx.fillStyle = '#b8c7ff';
+            ctx.fillText('点击「重新装填」继续挑战', CANVAS_W/2, CANVAS_H/2 + 110);
+            ctx.textAlign = 'left';
+        }
+        
+        // ---------- 动画与更新 (静态球无需移动逻辑，只做重绘和特效衰减) ----------
+        function drawAndUpdate() {
+            if (!canvas.isConnected) return;
+            
+            // 清除画布
+            ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+            drawBackground();
+            
+            // 绘制所有小球
+            for (let ball of balls) {
+                drawBall(ball);
+            }
+            
+            // 绘制命中特效
+            drawHitEffects();
+            
+            // 绘制准星（如果鼠标在canvas内）
+            drawCrosshair();
+            
+            // 游戏结束覆盖层
+            drawGameOverlay();
+            
+            // 更新小球闪光衰减（保证每一帧减少闪光值）
+            for (let ball of balls) {
+                if (ball.hitFlash > 0) {
+                    ball.hitFlash = Math.max(0, ball.hitFlash - 0.03);
+                }
+            }
+            
+            // 继续动画循环
+            animationId = requestAnimationFrame(drawAndUpdate);
+        }
+        
+        // ---------- 鼠标事件绑定 ----------
+        function setupEvents() {
+            // 鼠标移动：更新准星位置
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let canvasX = (e.clientX - rect.left) * scaleX;
+                let canvasY = (e.clientY - rect.top) * scaleY;
+                canvasX = Math.min(Math.max(0, canvasX), CANVAS_W);
+                canvasY = Math.min(Math.max(0, canvasY), CANVAS_H);
+                mouseX = canvasX;
+                mouseY = canvasY;
+                mouseInside = true;
+            });
+            
+            canvas.addEventListener('mouseleave', () => {
+                mouseInside = false;
+            });
+            
+            canvas.addEventListener('mouseenter', (e) => {
+                mouseInside = true;
+                // 进入时同步一次坐标
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let canvasX = (e.clientX - rect.left) * scaleX;
+                let canvasY = (e.clientY - rect.top) * scaleY;
+                canvasX = Math.min(Math.max(0, canvasX), CANVAS_W);
+                canvasY = Math.min(Math.max(0, canvasY), CANVAS_H);
+                mouseX = canvasX;
+                mouseY = canvasY;
+            });
+            
+            // 射击：鼠标点击
+            canvas.addEventListener('click', (e) => {
+                if (!gameActive) return;
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let clickCanvasX = (e.clientX - rect.left) * scaleX;
+                let clickCanvasY = (e.clientY - rect.top) * scaleY;
+                clickCanvasX = Math.min(Math.max(0, clickCanvasX), CANVAS_W);
+                clickCanvasY = Math.min(Math.max(0, clickCanvasY), CANVAS_H);
+                handleShoot(clickCanvasX, clickCanvasY);
+            });
+            
+            // 重启按钮
+            restartBtn.addEventListener('click', () => {
+                resetGame();
+            });
+        }
+        
+        // 初始化游戏
+        function init() {
+            setupEvents();
+            resetGame();   // 生成小球，启动计时器，动画循环开始
+        }
+        
+        init();
+    })();
+</script>
+</body>
+</html>
